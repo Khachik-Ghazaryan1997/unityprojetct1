@@ -79,63 +79,64 @@ public class Portal : MonoBehaviour
         }
     }
 
-    /// Positions the portal camera at the linked portal each frame,
-    /// facing outward along the linked portal's plane normal.
+    /// Positions the portal camera behind the linked portal each frame so
+    /// that looking through this portal feels like looking through a window
+    /// into the linked portal's scene. Uses off-axis projection (asymmetric
+    /// frustum) to produce correct parallax as the player moves around.
     void LateUpdate()
     {
-        if (linkedPortal == null || portalCamera == null)
+        if (linkedPortal == null || portalCamera == null || player == null)
             return;
 
-        
-        Vector3 offset = player.transform.position - transform.position;
-        Quaternion relativeRotation = linkedPortal.transform.rotation * Quaternion.Inverse(transform.rotation);
-        offset = -(relativeRotation * offset);
+        // === Step 1: Mirror the player's position to the linked portal ===
+        // Get the player's position in this portal's local space.
+        Vector3 playerLocal = transform.InverseTransformPoint(player.transform.position);
 
-        portalCamera.transform.position = linkedPortal.transform.position + offset;
+        // Flip X and Z (180° Y-axis rotation) so that entering one portal
+        // corresponds to exiting the other while facing the opposite direction.
+        Vector3 flipped = new Vector3(-playerLocal.x, playerLocal.y, -playerLocal.z);
 
-        Vector3 direction = linkedPortal.transform.position - portalCamera.transform.position;
+        // Place the camera at that mirrored position relative to the linked portal.
+        portalCamera.transform.position = linkedPortal.transform.TransformPoint(flipped);
 
-        //portalCamera.transform.rotation = Quaternion.LookRotation(direction);
+        // === Step 2: Orient the camera perpendicular to the linked portal ===
+        // The camera always looks straight through the linked portal surface,
+        // just like your eye direction doesn't change a real window's image.
+        portalCamera.transform.rotation = Quaternion.LookRotation(
+            linkedPortal.transform.forward,
+            linkedPortal.transform.up
+        );
 
+        // === Step 3: Build an off-center (asymmetric) frustum ===
+        // This is the key to the "window" effect. The near plane sits exactly
+        // on the linked portal's surface, and the frustum edges match the
+        // portal rectangle's edges as seen from the camera position.
 
+        // Portal centre in camera-local space.
+        Vector3 centerLocal = portalCamera.transform.InverseTransformPoint(
+            linkedPortal.transform.position
+        );
 
-        Matrix4x4 worldToCameraSpace = portalCamera.transform.worldToLocalMatrix;
+        // Near = distance from camera to the portal plane along the camera's
+        // forward axis (local Z). The camera is behind the portal, so this is
+        // always positive.
+        float near = Mathf.Max(centerLocal.z, 0.01f);
+        float far  = player.farClipPlane;
 
-        Vector3 portalInCameraSpace = worldToCameraSpace.MultiplyPoint3x4(linkedPortal.transform.position);
+        // Half-extents of the portal rectangle.
+        float hw = linkedPortal.planeSize.x * 0.5f;
+        float hh = linkedPortal.planeSize.y * 0.5f;
 
-        Quaternion rotationOfPortal = Quaternion.FromToRotation(Vector3.forward, portalInCameraSpace); 
-
-        Matrix4x4 T = Matrix4x4.Translate(-portalInCameraSpace);
-
-        Matrix4x4 R = Matrix4x4.Rotate(rotationOfPortal);
-
-        Matrix4x4 S = Matrix4x4.identity;
-
-        Vector3 cameraNewLocation = R *T * portalCamera.transform.position;
-
-        Debug.Log("Camera New Location: " + cameraNewLocation);
-        S[0,2] = -cameraNewLocation.x/cameraNewLocation.z;
-        S[1,2] = -cameraNewLocation.y/cameraNewLocation.z;
-
-        Matrix4x4 toOrigin = Matrix4x4.Translate(new Vector3(0f, 0f, -cameraNewLocation.z));
-        Matrix4x4 flipZ = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
-
-        portalCamera.worldToCameraMatrix = flipZ * toOrigin *T * worldToCameraSpace;
-        
-        
-        float near = Mathf.Max(-cameraNewLocation.z, 0.01f); 
-        float far = portalCamera.farClipPlane;
-        float aspect = planeSize.x / planeSize.y;
-        float halfHeight = planeSize.y * 0.5f; 
-        float halfWidth = halfHeight * aspect; 
+        // centerLocal.x / .y give the lateral offset of the portal centre
+        // from the camera's optical axis.  Shift the frustum accordingly.
+        float left   = centerLocal.x - hw;
+        float right  = centerLocal.x + hw;
+        float bottom = centerLocal.y - hh;
+        float top    = centerLocal.y + hh;
 
         portalCamera.projectionMatrix = Matrix4x4.Frustum(
-            -halfWidth, halfWidth,
-            -halfHeight, halfHeight,
-            near, far
+            left, right, bottom, top, near, far
         );
-        
-    
     }
 
     /// Called automatically by Unity whenever a serialized field is changed
